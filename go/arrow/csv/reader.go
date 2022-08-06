@@ -31,10 +31,15 @@ import (
 	"github.com/apache/arrow/go/v10/arrow/memory"
 )
 
+// HeaderReaderFunc this function reads the header from the csv and adjusts the schema
+// to suite
+type ReadHeaderFunc func(*csv.Reader, *arrow.Schema) (*arrow.Schema, error)
+
 // Reader wraps encoding/csv.Reader and creates array.Records from a schema.
 type Reader struct {
-	r      *csv.Reader
-	schema *arrow.Schema
+	csvr           *csv.Reader
+	readHeaderFunc ReadHeaderFunc
+	schema         *arrow.Schema
 
 	refs int64
 	bld  *array.RecordBuilder
@@ -65,13 +70,14 @@ func NewReader(r io.Reader, schema *arrow.Schema, opts ...Option) *Reader {
 	validate(schema)
 
 	rr := &Reader{
-		r:                csv.NewReader(r),
+		csvr:             csv.NewReader(r),
 		schema:           schema,
 		refs:             1,
 		chunk:            1,
 		stringsCanBeNull: false,
+		readHeaderFunc:   defaultReadHeader,
 	}
-	rr.r.ReuseRecord = true
+	rr.csvr.ReuseRecord = true
 	for _, opt := range opts {
 		opt(rr)
 	}
@@ -102,26 +108,25 @@ func NewReader(r io.Reader, schema *arrow.Schema, opts ...Option) *Reader {
 	return rr
 }
 
-func (r *Reader) readHeader() error {
-	records, err := r.r.Read()
+func defaultReadHeader(csvr *csv.Reader, schema *arrow.Schema) (*arrow.Schema, error) {
+	records, err := csvr.Read()
 	if err != nil {
-		return fmt.Errorf("arrow/csv: could not read header from file: %w", err)
+		return nil, fmt.Errorf("arrow/csv: could not read header from file: %w", err)
 	}
 
-	if len(records) != len(r.schema.Fields()) {
-		return ErrMismatchFields
+	if len(records) != len(schema.Fields()) {
+		return nil, ErrMismatchFields
 	}
 
 	fields := make([]arrow.Field, len(records))
 	for idx, name := range records {
-		fields[idx] = r.schema.Field(idx)
+		fields[idx] = schema.Field(idx)
 		fields[idx].Name = name
 	}
 
-	meta := r.schema.Metadata()
-	r.schema = arrow.NewSchema(fields, &meta)
-	r.bld = array.NewRecordBuilder(r.mem, r.schema)
-	return nil
+	meta := schema.Metadata()
+
+	return arrow.NewSchema(fields, &meta), nil
 }
 
 // Err returns the last error encountered during the iteration over the
@@ -145,7 +150,8 @@ func (r *Reader) Record() arrow.Record { return r.cur }
 func (r *Reader) Next() bool {
 	if r.header {
 		r.once.Do(func() {
-			r.err = r.readHeader()
+			r.schema, r.err = r.readHeaderFunc(r.csvr, r.schema)
+			r.bld = array.NewRecordBuilder(r.mem, r.schema)
 		})
 	}
 
@@ -165,7 +171,7 @@ func (r *Reader) Next() bool {
 // from that row.
 func (r *Reader) next1() bool {
 	var recs []string
-	recs, r.err = r.r.Read()
+	recs, r.err = r.csvr.Read()
 	if r.err != nil {
 		r.done = true
 		if errors.Is(r.err, io.EOF) {
@@ -192,7 +198,7 @@ func (r *Reader) nextall() bool {
 		recs [][]string
 	)
 
-	recs, r.err = r.r.ReadAll()
+	recs, r.err = r.csvr.ReadAll()
 	if r.err != nil {
 		return false
 	}
@@ -216,7 +222,7 @@ func (r *Reader) nextn() bool {
 	)
 
 	for i := 0; i < r.chunk && !r.done; i++ {
-		recs, err = r.r.Read()
+		recs, err = r.csvr.Read()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				r.err = err

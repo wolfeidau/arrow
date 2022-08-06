@@ -39,7 +39,7 @@ func WithComma(c rune) Option {
 	return func(cfg config) {
 		switch cfg := cfg.(type) {
 		case *Reader:
-			cfg.r.Comma = c
+			cfg.csvr.Comma = c
 		case *Writer:
 			cfg.w.Comma = c
 		default:
@@ -53,7 +53,7 @@ func WithComment(c rune) Option {
 	return func(cfg config) {
 		switch cfg := cfg.(type) {
 		case *Reader:
-			cfg.r.Comment = c
+			cfg.csvr.Comment = c
 		default:
 			panic(fmt.Errorf("arrow/csv: unknown config type %T", cfg))
 		}
@@ -118,6 +118,18 @@ func WithHeader(useHeader bool) Option {
 	}
 }
 
+// WithReadHeaderFunc enables or to customise the CSV-header handling
+func WithReadHeaderFunc(readHeaderFunc ReadHeaderFunc) Option {
+	return func(cfg config) {
+		switch cfg := cfg.(type) {
+		case *Reader:
+			cfg.readHeaderFunc = readHeaderFunc
+		default:
+			panic(fmt.Errorf("arrow/csv: unknown config type %T", cfg))
+		}
+	}
+}
+
 // DefaultNullValues is the set of values considered as NULL values by default
 // when Reader is configured to handle NULL values.
 var DefaultNullValues = []string{"", "NULL", "null"}
@@ -160,7 +172,8 @@ func WithNullWriter(null string) Option {
 }
 
 // WithBoolWriter override the default bool formatter with a fucntion that returns
-//  a string representaton of bool states. i.e. True, False, 1, 0
+//
+//	a string representaton of bool states. i.e. True, False, 1, 0
 func WithBoolWriter(fmtr func(bool) string) Option {
 	return func(cfg config) {
 		switch cfg := cfg.(type) {
